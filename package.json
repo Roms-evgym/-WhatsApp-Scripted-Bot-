@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-scripted-bot",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "description": "WhatsApp group command bot with Supabase-backed session storage.",
   "type": "module",
@@ -16,6 +16,7 @@
     "@whiskeysockets/baileys": "^6.7.22",
     "dotenv": "^16.4.7",
     "pino": "^9.6.0",
+    "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0"
   }
 }
