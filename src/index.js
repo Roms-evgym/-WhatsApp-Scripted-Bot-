@@ -1,5 +1,6 @@
 import "dotenv/config";
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import baileys from "@whiskeysockets/baileys";
 
 const makeWASocket = baileys.default || baileys.makeWASocket || baileys;
@@ -13,6 +14,7 @@ const {
 import { createClient } from "@supabase/supabase-js";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
+import QRCode from "qrcode";
 import { Boom } from "@hapi/boom";
 
 const PREFIX = process.env.BOT_PREFIX || "!scripted";
@@ -36,18 +38,127 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false }
 });
 
-// Render Web Services benötigen einen HTTP-Port. Dieser Endpunkt ist nur ein Health Check.
-const server = http.createServer((req, res) => {
-  if (req.url === "/health" || req.url === "/") {
-    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+// Render Web Services benötigen einen HTTP-Port. Der QR-Code ist nur mit QR_VIEW_TOKEN erreichbar.
+const QR_VIEW_TOKEN = process.env.QR_VIEW_TOKEN || "";
+let latestQr = null;
+
+function hasQrAccess(url) {
+  const supplied = url.searchParams.get("token") || "";
+  if (!QR_VIEW_TOKEN || !supplied) return false;
+  const expectedBuffer = Buffer.from(QR_VIEW_TOKEN);
+  const suppliedBuffer = Buffer.from(supplied);
+  return expectedBuffer.length === suppliedBuffer.length &&
+    timingSafeEqual(expectedBuffer, suppliedBuffer);
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url || "/", "http://localhost");
+  const noStore = {
+    "cache-control": "no-store, no-cache, must-revalidate, private",
+    "pragma": "no-cache",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff"
+  };
+
+  if (url.pathname === "/health" || url.pathname === "/") {
+    res.writeHead(200, { ...noStore, "content-type": "text/plain; charset=utf-8" });
     res.end("WhatsApp Scripted Bot is running");
     return;
   }
-  res.writeHead(404);
+
+  if (url.pathname === "/qr" || url.pathname === "/qr.png") {
+    if (!QR_VIEW_TOKEN) {
+      res.writeHead(503, { ...noStore, "content-type": "text/plain; charset=utf-8" });
+      res.end("QR-Bildanzeige ist nicht eingerichtet. QR_VIEW_TOKEN fehlt.");
+      return;
+    }
+    if (!hasQrAccess(url)) {
+      res.writeHead(401, { ...noStore, "content-type": "text/plain; charset=utf-8" });
+      res.end("Nicht autorisiert. Token fehlt oder ist falsch.");
+      return;
+    }
+    if (!latestQr) {
+      res.writeHead(503, { ...noStore, "content-type": "text/plain; charset=utf-8" });
+      res.end("Aktuell ist kein QR-Code verfügbar. Bitte kurz warten und neu laden.");
+      return;
+    }
+
+    if (url.pathname === "/qr.png") {
+      try {
+        const png = await QRCode.toBuffer(latestQr, {
+          type: "png",
+          errorCorrectionLevel: "H",
+          margin: 4,
+          scale: 10
+        });
+        res.writeHead(200, { ...noStore, "content-type": "image/png" });
+        res.end(png);
+      } catch (error) {
+        console.error("QR-Bild konnte nicht erstellt werden:", error.message);
+        res.writeHead(500, { ...noStore, "content-type": "text/plain; charset=utf-8" });
+        res.end("QR-Bild konnte nicht erstellt werden.");
+      }
+      return;
+    }
+
+    const tokenJson = JSON.stringify(url.searchParams.get("token"));
+    const html = `<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>WhatsApp Bot verbinden</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#f4f6f8;color:#17202a;margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;box-sizing:border-box}
+main{background:white;border-radius:20px;padding:24px;max-width:440px;width:100%;box-sizing:border-box;text-align:center;box-shadow:0 8px 32px #00000012}
+img{width:min(100%,360px);height:auto;image-rendering:pixelated;background:white}
+p{line-height:1.5;color:#4b5563}#status{font-size:14px}
+</style>
+</head>
+<body><main>
+<h1>WhatsApp verbinden</h1>
+<p>Öffne WhatsApp auf deinem Handy → <b>Verknüpfte Geräte</b> → <b>Gerät hinzufügen</b> und scanne diesen QR-Code.</p>
+<img id="qr" alt="Aktueller WhatsApp-Verknüpfungs-QR-Code">
+<p id="status">Lade aktuellen QR-Code …</p>
+</main>
+<script>
+const token = ${tokenJson};
+const image = document.getElementById("qr");
+const status = document.getElementById("status");
+async function refreshQr(){
+  try{
+    const response = await fetch("/qr.png?token=" + encodeURIComponent(token) + "&t=" + Date.now(), {cache:"no-store"});
+    if(!response.ok) throw new Error(response.status === 503 ? "Noch kein QR-Code verfügbar – bitte warten." : "QR-Code konnte nicht geladen werden.");
+    const blob = await response.blob();
+    const oldUrl = image.dataset.objectUrl;
+    const objectUrl = URL.createObjectURL(blob);
+    image.src = objectUrl;
+    image.dataset.objectUrl = objectUrl;
+    if(oldUrl) URL.revokeObjectURL(oldUrl);
+    status.textContent = "QR-Code wird automatisch aktualisiert. Bitte sofort scannen.";
+  }catch(error){status.textContent = error.message;}
+}
+refreshQr();
+setInterval(refreshQr, 2000);
+</script>
+</body>
+</html>`;
+    res.writeHead(200, {
+      ...noStore,
+      "content-type": "text/html; charset=utf-8",
+      "content-security-policy": "default-src 'none'; img-src 'self' blob:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+    });
+    res.end(html);
+    return;
+  }
+
+  res.writeHead(404, { ...noStore, "content-type": "text/plain; charset=utf-8" });
   res.end("Not found");
 });
 server.listen(Number(process.env.PORT) || 3000, "0.0.0.0", () => {
-  console.log("Health-Check-Server gestartet.");
+  console.log("HTTP-Server gestartet. Geschützte QR-Seite: /qr?token=DEIN_QR_VIEW_TOKEN");
+  if (!QR_VIEW_TOKEN) console.warn("QR_VIEW_TOKEN fehlt – QR-Bildanzeige bleibt deaktiviert.");
 });
 
 async function readAuthRow(id) {
@@ -157,7 +268,8 @@ async function startBot() {
 
   sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      console.log("QR-CODE: Mit WhatsApp > Verknüpfte Geräte > Gerät hinzufügen scannen.");
+      latestQr = qr;
+      console.log("Neuer WhatsApp-QR-Code erstellt. Geschützte Bildanzeige: /qr");
       qrcode.generate(qr, { small: true });
     }
     if (connection === "connecting") console.log("WhatsApp verbindet ...");
