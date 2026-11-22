@@ -1,12 +1,15 @@
 import "dotenv/config";
 import http from "node:http";
-import makeWASocket, {
+import baileys from "@whiskeysockets/baileys";
+
+const makeWASocket = baileys.default || baileys.makeWASocket || baileys;
+const {
   BufferJSON,
   DisconnectReason,
   fetchLatestBaileysVersion,
   initAuthCreds,
   proto
-} from "@whiskeysockets/baileys";
+} = baileys;
 import { createClient } from "@supabase/supabase-js";
 import pino from "pino";
 import { Boom } from "@hapi/boom";
