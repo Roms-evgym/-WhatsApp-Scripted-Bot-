@@ -11,6 +11,7 @@ const PREFIX = process.env.BOT_PREFIX || "!scripted";
 const TARGET_GROUP_LINK = process.env.TARGET_GROUP_LINK;
 const SOURCE_GROUP_ID = process.env.SOURCE_GROUP_ID || "";
 const LOG_GROUPS = (process.env.LOG_GROUPS || "true").toLowerCase() === "true";
+const AUTH_DIR = process.env.AUTH_DIR || "auth_info";
 
 if (!TARGET_GROUP_LINK?.startsWith("https://chat.whatsapp.com/")) {
   console.error("Bitte TARGET_GROUP_LINK in .env setzen.");
@@ -21,7 +22,7 @@ const sentRecently = new Map();
 const COOLDOWN_MS = 10 * 60 * 1000;
 
 async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState("auth_info");
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
