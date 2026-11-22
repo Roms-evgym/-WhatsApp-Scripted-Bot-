@@ -12,6 +12,7 @@ const {
 } = baileys;
 import { createClient } from "@supabase/supabase-js";
 import pino from "pino";
+import qrcode from "qrcode-terminal";
 import { Boom } from "@hapi/boom";
 
 const PREFIX = process.env.BOT_PREFIX || "!scripted";
@@ -135,14 +136,16 @@ const COOLDOWN_MS = 10 * 60 * 1000;
 let reconnectTimer;
 
 async function startBot() {
+  console.log("Lade WhatsApp-Anmeldedaten aus Supabase ...");
   const { state, saveCreds } = await useSupabaseAuthState();
+  console.log("Lade unterstützte WhatsApp-Version ...");
   const { version } = await fetchLatestBaileysVersion();
+  console.log("Starte WhatsApp-Verbindung ...");
 
   const sock = makeWASocket({
     version,
     auth: state,
     logger: pino({ level: "silent" }),
-    printQRInTerminal: true,
     browser: ["Scripted Invite Bot", "Chrome", "1.0.0"],
     markOnlineOnConnect: false,
     syncFullHistory: false
@@ -152,7 +155,12 @@ async function startBot() {
     saveCreds().catch((error) => console.error("WhatsApp-Anmeldedaten konnten nicht gespeichert werden:", error.message));
   });
 
-  sock.ev.on("connection.update", ({ connection, lastDisconnect }) => {
+  sock.ev.on("connection.update", ({ connection, lastDisconnect, qr }) => {
+    if (qr) {
+      console.log("QR-CODE: Mit WhatsApp > Verknüpfte Geräte > Gerät hinzufügen scannen.");
+      qrcode.generate(qr, { small: true });
+    }
+    if (connection === "connecting") console.log("WhatsApp verbindet ...");
     if (connection === "open") console.log("WhatsApp verbunden. Bot wartet auf", PREFIX);
     if (connection === "close") {
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
